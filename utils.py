@@ -13,6 +13,7 @@ import subprocess
 import sys
 
 def test_connection(host, port, username, passwd):
+    ssh = None
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -28,7 +29,8 @@ def test_connection(host, port, username, passwd):
     except:
         print 'Generic error'
     finally:
-        ssh.close()
+        if ssh:
+            ssh.close()
 
 
 def gethostbyname(hostname):
@@ -42,7 +44,8 @@ def gethostbyname(hostname):
         return
 
 
-def chkdir_remote(path):
+def chkdir_remote(path, host, port, username, passwd):
+    t = None
     try:
         t = paramiko.Transport((host, port))
         t.connect(username=username, password=passwd)
@@ -56,8 +59,8 @@ def chkdir_remote(path):
                 print path + ' is not a directory'
         except:
             print 'Destination does not exist'
-
-        t.close()
+            if t:
+                t.close()
 
     except paramiko.AuthenticationException:
         print 'Authentication failed'
@@ -68,11 +71,12 @@ def chkdir_remote(path):
     #except:
     #    print 'Generic error'
     finally:
-        t.close()
+        if t:
+            t.close()
 
 
 def chksource_local(path):
-    if not os.path.exists(source):
+    if not os.path.exists(path):
         print 'Path does not exist'
 
 
@@ -116,16 +120,18 @@ def get_dir_content_remote(sftp, ssh, path):
     attributes['content'] = content
 
     for filename in sftp.listdir(path):
+        # 'file' shadows builtin name, plus:
+        filename = filename # or you could fail concatenating None in 'Destination {0} does not exist'
         try:
-            file = os.path.join(path, filename)
-            attrs = sftp.stat(file)
+            filename = os.path.join(path, filename)
+            attrs = sftp.stat(filename)
             if (attrs.st_mode & stat.S_IFDIR):
-                content[file] = get_dir_content_remote(sftp, ssh, file)
+                content[filename] = get_dir_content_remote(sftp, ssh, filename)
             elif (attrs.st_mode & stat.S_IFREG):
-                content[file] = get_file_attrs_remote(sftp, ssh, file)
+                content[filename] = get_file_attrs_remote(sftp, ssh, filename)
         except Exception as ex:
             print ex
-            print 'Destination {0} does not exist'.format(file)
+            print 'Destination {0} does not exist'.format(filename)
             sys.exit(1)
 
     return attributes
@@ -157,7 +163,7 @@ def get_content_local(path):
 
     content = {}
     if os.path.isfile(path):
-        content[path] = get_file_attrs_local(path)        
+        content[path] = get_file_attrs_local(path)
     elif os.path.isdir(path):
         content[path] = get_dir_content_local(path)
 
@@ -169,8 +175,7 @@ def get_content_local(path):
 def flatten(input, output=None):
     """ Flattens out nested dictionary """
 
-    if not output:
-        output = {}
+    output = output or {}
 
     for key in input.keys():
         output[key] = input[key]
@@ -192,7 +197,7 @@ def get_content_remote(sftp, ssh, path):
     return content
 
 
-def establish_sftp_conn(host, port, username, password):
+def establish_sftp_conn(host, port, username, passwd):
     """ Establishes sFTP connection to host:post using username and password """
 
     t = paramiko.Transport((host, port))
@@ -224,6 +229,7 @@ def get_hash_remote(ssh, path):
     """ Gets hash of a remote *path* file """
 
     stdin, stdout, stderr = ssh.exec_command("md5sum " + path)
+    # Warning if stderr has something
     return stdout.read().split()[0]
 
 
@@ -256,7 +262,7 @@ def create_dirs(sftp, source_tree, source, dest):
         sftp.mkdir(dir)
 
 
-def sync_files(source_tree, source, dest, host):
+def sync_files(source_tree, source, dest, host, username):
     """ Creates a tuple of (source, dest) files to be syncronized.
         Calls rsync to make synchronization """
 
@@ -269,12 +275,12 @@ def sync_files(source_tree, source, dest, host):
     for file in source_files:
         destination = '{0}@{1}:{2}'.format(username, host, file.replace(source, dest))
         dest_files.append(destination)
-    
+
     for src, dst in zip(source_files, dest_files):
-        rsync(0, src, dst)
+        rsync(src, dst, 0)
 
 
-def rsync(options, source, dest):
+def rsync(source, dest, *options):
     """ rsync wrapper function """
 
     cmd = shlex.split('rsync {} {}'.format(source, dest))
