@@ -27,3 +27,4 @@ def int_to_words(n):
         return "{0}{1}".format(tens[n // 10],
                                "-{0}".format(int_to_words(n % 10))
                                if n % 10 else "")
+int_to_words(44)
