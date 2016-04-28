@@ -11,51 +11,64 @@ import os.path
 import shlex
 import subprocess
 import sys
+from logger import logger
+import re
 
-def test_connection(host, port, username, passwd):
+
+host = 'ubuntu-server'
+host_ip = '192.168.57.101'
+port = 22
+username = 'ed'
+passwd = 'qwerty'
+path_remote = '/home/ed/tmp'
+
+
+DEST_PATTERN = '([\w.]+)(:|,)([0-9]+)@([\w.\-]+):(/[\w./]+)'
+
+def isdir_local(path):
     try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(hostname=host, port=port, username=username, password=passwd)
-        print 'Connection verified'
-        ssh.close()
-    except paramiko.AuthenticationException:
-        print 'Authentication failed'
-    except paramiko.SSHException:
-        print 'SSHException error'
-    except socket.error as se:
-        print se
+        path = os.path.expanduser(path)
     except:
-        print 'Generic error'
-    finally:
-        ssh.close()
+        return False
+    if os.path.isdir(path):
+        return True
+    return False
 
 
-def gethostbyname(hostname):
+def isfile_local(path):
     try:
-        return socket.gethostbyname(hostname)
-    except socket.error:
-        print 'Unknown hostname'
-        return
+        path = os.path.expanduser(path)
     except:
-        print 'Generic error'
-        return
+        return False
+    if os.path.isfile(path):
+        return True
+    return False
 
 
-def chkdir_remote(path):
+def chk_source(path):
+    if isdir_local(path):
+        return True
+    elif isfile_local(path):
+        return True
+    else:
+        return False
+
+
+def isdir_remote(host, port, username, passwd, directory):
     try:
         t = paramiko.Transport((host, port))
         t.connect(username=username, password=passwd)
         sftp = paramiko.SFTPClient.from_transport(t)
-
         try:
-            attrs = sftp.stat(path)
+            attrs = sftp.stat(directory)
             if (attrs.st_mode & stat.S_IFDIR):
-                print path + ' is a directory'
+                return True
             else:
-                print path + ' is not a directory'
+                print "Destination {} is not a directory".format(directory)
+                return
         except:
-            print 'Destination does not exist'
+            print "Destination {} does not exist".format(directory)
+            return
 
         t.close()
 
@@ -65,15 +78,69 @@ def chkdir_remote(path):
         print 'SSHException error'
     except socket.error as se:
         print se
-    #except:
-    #    print 'Generic error'
-    finally:
-        t.close()
+    except Exception as ex:
+        print ex
 
 
-def chksource_local(path):
-    if not os.path.exists(source):
-        print 'Path does not exist'
+def chk_dest(dest, passwd):
+    match = chk_dest_format(dest, DEST_PATTERN) # Allow an array of patterns to be tested
+    if not match:
+        return
+
+    host = match.group(4)
+    port = int(match.group(3))
+    username = match.group(1)
+    directory = match.group(5)
+
+    if not chk_connection(host, port, username, passwd):
+        return
+
+    if isdir_remote(host, port, username, passwd, directory):
+        return True
+    else:
+        return
+
+
+def chk_dest_format(dest, *patterns):
+    """ Checks whether the server connection details follow the user:port@host:directory pattern.
+        Then, attempts to establish connection with the remotee host using provided credentials
+        and connection settings. Exits with the error code in case of failure. """
+
+    for pattern in patterns:
+        match = re.search(pattern, dest)
+        if match:
+            return match
+
+    return
+
+
+def check_args(parser):
+    if len(parser.args.arguments) < 2:
+        print 'At least one source and one destination must be provided'
+        sys.exit(1)
+
+    if not parser.args.passwd:
+        print 'No password provided...'
+        sys.exit(1)
+
+    sources = []
+    destinations = []
+    for path in parser.args.arguments:
+        if chk_source(path):
+            sources.append(path)
+        elif chk_dest(path, parser.args.passwd):
+            destinations.append(path)
+        else:
+            print '"{}" is not a valid directory or destination'.format(path)
+
+    if not sources:
+        print 'No valid source provided'
+        sys.exit(1)
+    if not destinations:
+        print 'No valid destination provided'
+        sys.exit(1)
+
+    return sources, destinations
 
 
 def get_file_attrs_local(path):
@@ -107,7 +174,13 @@ def get_file_attrs_remote(sftp, ssh, path):
 def get_dir_content_remote(sftp, ssh, path):
     """ Returns content of a remote *path* directory """
 
-    st = sftp.stat(path)
+    try:
+        st = sftp.stat(path)
+    except Exception as ex:
+        print ex
+        print 'Path: ' + path
+        sys.exit(1)
+
     attributes = {}
     attributes['type'] = 'directory'
     attributes['uid'] = st.st_uid
@@ -192,14 +265,43 @@ def get_content_remote(sftp, ssh, path):
     return content
 
 
-def establish_sftp_conn(host, port, username, password):
+def establish_sftp_conn(host, port, username, passwd):
     """ Establishes sFTP connection to host:post using username and password """
 
-    t = paramiko.Transport((host, port))
-    t.connect(username=username, password=passwd)
-    sftp = paramiko.SFTPClient.from_transport(t)
+    try:
+        t = paramiko.Transport((host, port))
+        t.connect(username=username, password=passwd)
+        sftp = paramiko.SFTPClient.from_transport(t)
+        return sftp
+    except paramiko.AuthenticationException:
+        print 'Authentication failed'
+    except paramiko.SSHException:
+        print 'SSHException error'
+    except socket.error as se:
+        print se
+    except Exception as ex:
+        print ex
 
-    return sftp
+    return
+
+
+def chk_connection(host, port, username, passwd):
+    """ Establishes sFTP connection to host:post using username and password """
+
+    try:
+        t = paramiko.Transport((host, port))
+        t.connect(username=username, password=passwd)
+        return True
+    except paramiko.AuthenticationException:
+        print 'Authentication failed'
+    except paramiko.SSHException:
+        print 'SSHException error'
+    except socket.error as se:
+        print se
+    except Exception as ex:
+        print ex
+
+    return
 
 
 def establish_ssh_conn(host, port, username, passwd):
@@ -271,12 +373,12 @@ def sync_files(source_tree, source, dest, host):
         dest_files.append(destination)
     
     for src, dst in zip(source_files, dest_files):
-        rsync(0, src, dst)
+        rsync(src, dst)
 
 
-def rsync(options, source, dest):
+def rsync(source, dest, *options):
     """ rsync wrapper function """
 
     cmd = shlex.split('rsync {} {}'.format(source, dest))
-    print cmd
+    print 'Performing command: {0} {1} {2}'.format(cmd[0], cmd[1], cmd[2])
     subprocess.Popen(cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
