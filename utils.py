@@ -26,20 +26,12 @@ path_remote = '/home/ed/tmp'
 DEST_PATTERN = '([\w.]+)(:|,)([0-9]+)@([\w.\-]+):(/[\w./]+)'
 
 def isdir_local(path):
-    try:
-        path = os.path.expanduser(path)
-    except:
-        return False
     if os.path.isdir(path):
         return True
     return False
 
 
 def isfile_local(path):
-    try:
-        path = os.path.expanduser(path)
-    except:
-        return False
     if os.path.isfile(path):
         return True
     return False
